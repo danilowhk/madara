@@ -61,3 +61,12 @@ fn test_event_hash() {
         FieldElement::from_str("0x754233cddfc3670a8e9c47f714397312a0319691a8762a49351fad896b37462").unwrap()
     )
 }
+
+#[test]
+fn test_pedersen_hash() {
+    let pedersen_hasher = PedersenHasher::default();
+    let hash_result = pedersen_hasher.hash(&test_data());
+    let expected_hash = hash(HashType::Pedersen, &test_data());
+
+    assert_eq!(hash_result, expected_hash);
+}
