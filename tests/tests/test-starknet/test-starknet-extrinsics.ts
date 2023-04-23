@@ -1,16 +1,24 @@
-import "@madara/api-augment";
-import { u8aToHex } from "@polkadot/util";
+import "@keep-starknet-strange/madara-api-augment";
 
 import { expect } from "chai";
-import { jumpBlocks } from "../../util/block";
 
 import { describeDevMadara } from "../../util/setup-dev-tests";
-import { declare, deploy, initialize } from "../../util/starknet";
+import {
+  declare,
+  deploy,
+  initialize,
+  mint,
+  transfer,
+} from "../../util/starknet";
+import { jumpBlocks } from "../../util/block";
+import { createBlockWithExtrinsic } from "../../util/substrate-rpc";
 
 const mintAmount =
   "0x0000000000000000000000000000000000000000000000000000000000000001";
 const contractAddress =
-  "0x0000000000000000000000000000000000000000000000000000000000000101";
+  "0x0000000000000000000000000000000000000000000000000000000000000001";
+const feeTokenAddress =
+  "0x040e59c2c182a58fb0a74349bfa4769cbbcba32547591dd3fb1def8623997d00";
 const tokenClassHash =
   "0x025ec026985a3bf9d0cc1fe17326b245bfdc3ff89b8fde106242a3ea56c5a918";
 
@@ -20,29 +28,61 @@ describeDevMadara("Pallet Starknet - Extrinsics", (context) => {
     expect(rdy).to.be.true;
   });
 
+  it("should jump 10 blocks", async function () {
+    const rdy = context.polkadotApi.isConnected;
+    expect(rdy).to.be.true;
+
+    await jumpBlocks(context, 10);
+  });
+
   it("should declare a new contract class", async function () {
-    const blockHash = await declare(
-      context.polkadotApi,
-      context.alice,
-      contractAddress,
-      tokenClassHash
+    const {
+      result: { events },
+    } = await context.createBlock(
+      declare(context.polkadotApi, contractAddress, tokenClassHash)
     );
 
-    console.log("blockhash: ", blockHash);
-
-    expect(blockHash).to.not.be.undefined;
+    expect(
+      events.find(
+        ({ event: { section, method } }) =>
+          section == "system" && method == "ExtrinsicSuccess"
+      )
+    ).to.exist;
   });
 
   it("should deploy a new contract", async function () {
-    const blockHash = await deploy(
-      context.polkadotApi,
-      context.alice,
-      contractAddress,
-      tokenClassHash
+    const {
+      result: { events },
+    } = await context.createBlock(
+      deploy(context.polkadotApi, contractAddress, tokenClassHash)
     );
 
-    console.log("blockhash: ", blockHash);
+    expect(
+      events.find(
+        ({ event: { section, method } }) =>
+          section == "system" && method == "ExtrinsicSuccess"
+      )
+    ).to.exist;
+  });
 
-    expect(blockHash).to.not.be.undefined;
+  it("should execute a transfer", async function () {
+    const {
+      result: { events },
+    } = await context.createBlock(
+      transfer(
+        context.polkadotApi,
+        contractAddress,
+        feeTokenAddress,
+        contractAddress,
+        mintAmount
+      )
+    );
+
+    expect(
+      events.find(
+        ({ event: { section, method } }) =>
+          section == "system" && method == "ExtrinsicSuccess"
+      )
+    ).to.exist;
   });
 });

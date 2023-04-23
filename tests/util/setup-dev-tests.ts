@@ -98,13 +98,13 @@ export function describeDevMadara(
         : {
             runningNode: null,
             p2pPort: 19931,
-            wsPort: 19933,
-            rpcPort: 19932,
+            wsPort: 9944,
+            rpcPort: 9933,
           };
       madaraProcess = init.runningNode;
       context.rpcPort = init.rpcPort;
 
-      // Context is given prior to this assignement, so doing
+      // Context is given prior to this assignment, so doing
       // context = init.context will fail because it replace the variable;
 
       context._polkadotApis = [];
@@ -118,7 +118,7 @@ export function describeDevMadara(
         // Necessary hack to allow polkadotApi to finish its internal metadata loading
         // apiPromise.isReady unfortunately doesn't wait for those properly
         await new Promise((resolve) => {
-          setTimeout(resolve, 500);
+          setTimeout(resolve, 1000);
         });
 
         return apiPromise;
@@ -126,8 +126,6 @@ export function describeDevMadara(
 
       context.polkadotApi = await context.createPolkadotApi();
 
-      // Bug WASM not initialized
-      await context.polkadotApi.isReady;
       const keyringSr25519 = new Keyring({ type: "sr25519" });
       context.alice = keyringSr25519.addFromUri("//Alice");
 
@@ -154,9 +152,8 @@ export function describeDevMadara(
             ? transactions
             : [transactions];
         for await (const call of txs) {
-          console.log(call.isSigned);
           if (typeof call == "string") {
-            // Starknet
+            // TODO: update this when we have the rpc endpoint
             // results.push({
             //   type: "eth",
             //   hash: (
@@ -179,11 +176,6 @@ export function describeDevMadara(
               hash: (await call.send()).toString(),
             });
           } else {
-            // Bug WASM not initialized
-            await context.polkadotApi.isReady;
-            const keyringSr25519 = new Keyring({ type: "sr25519" });
-            const alice = keyringSr25519.addFromUri("//Alice");
-
             const tx = context.polkadotApi.tx(call);
             debug(
               `- Unsigned: ${tx.method.section}.${tx.method.method}(${tx.args
@@ -192,7 +184,7 @@ export function describeDevMadara(
             );
             results.push({
               type: "sub",
-              hash: (await call.signAndSend(alice)).toString(),
+              hash: (await call.send()).toString(),
             });
           }
         }

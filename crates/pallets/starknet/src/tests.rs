@@ -1,18 +1,27 @@
 use core::str::FromStr;
 
-use blockifier::test_utils::{get_contract_class, ERC20_CONTRACT_PATH};
-use frame_support::{assert_err, assert_ok, bounded_vec, BoundedVec};
+use blockifier::execution::contract_class::ContractClass;
+use blockifier::test_utils::{get_contract_class, ACCOUNT_CONTRACT_PATH, ERC20_CONTRACT_PATH};
+use frame_support::{assert_err, assert_ok, bounded_vec, debug, BoundedVec};
 use hex::FromHex;
+use hexlit::hex;
+use lazy_static::lazy_static;
 use mp_starknet::block::Header as StarknetHeader;
 use mp_starknet::crypto::commitment;
 use mp_starknet::crypto::hash::pedersen::PedersenHasher;
-use mp_starknet::execution::{CallEntryPointWrapper, ContractClassWrapper, EntryPointTypeWrapper};
-use mp_starknet::transaction::types::{EventWrapper, Transaction};
+use mp_starknet::execution::{
+    CallEntryPointWrapper, ContractAddressWrapper, ContractClassWrapper, EntryPointTypeWrapper,
+};
+use mp_starknet::starknet_serde::transaction_from_json;
+use mp_starknet::transaction::types::{EventWrapper, Transaction, TxType};
 use sp_core::{H256, U256};
+use sp_runtime::transaction_validity::InvalidTransaction::Payment;
+use sp_runtime::transaction_validity::TransactionValidityError::Invalid;
+use sp_runtime::DispatchError;
 
 use crate::mock::*;
 use crate::types::Message;
-use crate::{Error, Event};
+use crate::{Error, Event, SEQUENCER_ADDRESS};
 
 #[test]
 fn should_calculate_contract_addr_correct() {
@@ -51,10 +60,17 @@ fn given_normal_conditions_when_current_block_then_returns_correct_block() {
             event_count: 2,
             event_commitment: H256::from_str("0x03ebee479332edbeecca7dee501cb507c69d51e0df116d28ae84cd2671dfef02")
                 .unwrap(),
+            sequencer_address: SEQUENCER_ADDRESS,
             ..StarknetHeader::default()
         };
 
-        pretty_assertions::assert_eq!(*current_block.header(), expected_current_block)
+        pretty_assertions::assert_eq!(*current_block.header(), expected_current_block);
+        pretty_assertions::assert_eq!(current_block.transactions_hashes().len(), 1);
+        pretty_assertions::assert_eq!(
+            current_block.transactions_hashes().get(0).unwrap(),
+            &H256::from_str("0x0000000000000000000000000000000000000000000000000000000000000001").unwrap()
+        );
+        debug(&current_block);
     });
 }
 
@@ -84,35 +100,9 @@ fn given_hardcoded_contract_run_invoke_tx_fails_invalid_tx_version() {
         run_to_block(2);
 
         let none_origin = RuntimeOrigin::none();
-        let (account_addr, account_class_hash, _) = account_helper(TEST_ACCOUNT_SALT);
 
-        // Example tx : https://testnet.starkscan.co/tx/0x6fc3466f58b5c6aaa6633d48702e1f2048fb96b7de25f2bde0bce64dca1d212
-        let transaction = Transaction::new(
-            0_u8,
-            H256::from_str("0x06fc3466f58b5c6aaa6633d48702e1f2048fb96b7de25f2bde0bce64dca1d212").unwrap(),
-            bounded_vec![
-                H256::from_str("0x00f513fe663ffefb9ad30058bb2d2f7477022b149a0c02fb63072468d3406168").unwrap(),
-                H256::from_str("0x02e29e92544d31c03e89ecb2005941c88c28b4803a3647a7834afda12c77f096").unwrap()
-            ],
-            bounded_vec!(),
-            account_addr,
-            U256::from(0),
-            CallEntryPointWrapper::new(
-                Some(account_class_hash),
-                EntryPointTypeWrapper::External,
-                None,
-                bounded_vec![
-                    U256::from_str("0x024d1e355f6b9d27a5a420c8f4b50cea9154a8e34ad30fc39d7c98d3c177d0d7").unwrap(), // Contract address
-                    U256::from_str("0x00e7def693d16806ca2a2f398d8de5951344663ba77f340ed7a958da731872fc").unwrap(), // Selector
-                    U256::from_str("0x0000000000000000000000000000000000000000000000000000000000000001").unwrap(), // Length
-                    U256::from_str("0x0000000000000000000000000000000000000000000000000000000000000019").unwrap(), // Value
-                ],
-                account_addr,
-                account_addr
-            ),
-            None,
-            None,
-        );
+        let json_content: &str = include_str!("../../../../resources/transactions/invoke_invalid_version.json");
+        let transaction = transaction_from_json(json_content, &[]).expect("Failed to create Transaction from JSON");
 
         assert_err!(Starknet::invoke(none_origin, transaction), Error::<Test>::TransactionExecutionFailed);
     });
@@ -125,48 +115,33 @@ fn given_hardcoded_contract_run_invoke_tx_then_it_works() {
         run_to_block(2);
 
         let none_origin = RuntimeOrigin::none();
-        let blockifier_account_address = <[u8; 32]>::from_hex("02356b628d108863baf8644c945d97bad70190af5957031f4852d00d0f690a77").unwrap();
-        let blockifier_account_class_hash = <[u8; 32]>::from_hex(BLOCKIFIER_ACCOUNT_CLASS.strip_prefix("0x").unwrap()).unwrap();
 
-        // Example tx : https://testnet.starkscan.co/tx/0x6fc3466f58b5c6aaa6633d48702e1f2048fb96b7de25f2bde0bce64dca1d212
-        let transaction = Transaction{
-            hash: H256::from_str("0x06fc3466f58b5c6aaa6633d48702e1f2048fb96b7de25f2bde0bce64dca1d212").unwrap(),
-            signature: bounded_vec![
-                H256::from_str("0x00f513fe663ffefb9ad30058bb2d2f7477022b149a0c02fb63072468d3406168").unwrap(),
-                H256::from_str("0x02e29e92544d31c03e89ecb2005941c88c28b4803a3647a7834afda12c77f096").unwrap()
+        let json_content: &str = include_str!("../../../../resources/transactions/invoke.json");
+        let transaction = transaction_from_json(json_content, &[]).expect("Failed to create Transaction from JSON");
+
+        let tx = Message {
+            topics: vec![
+                "0xdb80dd488acf86d17c747445b0eabb5d57c541d3bd7b6b87af987858e5066b2b".to_owned(),
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+                "0x0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+                "0x01310e2c127c3b511c5ac0fd7949d544bb4d75b8bc83aaeb357e712ecf582771".to_owned(),
             ],
-            sender_address: blockifier_account_address,
-            call_entrypoint: CallEntryPointWrapper::new(
-                Some(blockifier_account_class_hash),
-                EntryPointTypeWrapper::External,
-                None,
-                bounded_vec![
-                    U256::from_str("0x024d1e355f6b9d27a5a420c8f4b50cea9154a8e34ad30fc39d7c98d3c177d0d7").unwrap(), // Contract address
-                    U256::from_str("0x00e7def693d16806ca2a2f398d8de5951344663ba77f340ed7a958da731872fc").unwrap(), // Selector
-                    U256::one(), // Length
-                    U256::from(25), // Value
-                ],
-                blockifier_account_address,
-                blockifier_account_address,
-            ),
-            ..Transaction::default()
-        };
+            data: "0x0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+        }
+        .try_into_transaction()
+        .unwrap();
 
-        let tx =
-            Message {
-                topics: vec![
-                    "0xdb80dd488acf86d17c747445b0eabb5d57c541d3bd7b6b87af987858e5066b2b".to_owned(),
-                    "0x0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
-                    "0x0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
-                    "0x01310e2c127c3b511c5ac0fd7949d544bb4d75b8bc83aaeb357e712ecf582771".to_owned(),
-                ],
-                data: "0x0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
-            }
-            .try_into_transaction()
-            .unwrap();
-
-        assert_ok!(Starknet::invoke(none_origin.clone(), transaction));
+        assert_ok!(Starknet::invoke(none_origin.clone(), transaction.clone()));
         assert_ok!(Starknet::consume_l1_message(none_origin, tx));
+
+        let pending = Starknet::pending();
+        pretty_assertions::assert_eq!(pending.len(), 2);
+
+        let receipt = &pending.get(0).unwrap().1;
+        pretty_assertions::assert_eq!(receipt.actual_fee, U256::from(0));
+        pretty_assertions::assert_eq!(receipt.events.len(), 0);
+        pretty_assertions::assert_eq!(receipt.transaction_hash, transaction.hash);
+        pretty_assertions::assert_eq!(receipt.tx_type, TxType::InvokeTx);
     });
 }
 
@@ -177,61 +152,44 @@ fn given_hardcoded_contract_run_invoke_tx_then_event_is_emitted() {
         run_to_block(2);
 
         let none_origin = RuntimeOrigin::none();
-        let blockifier_account_address = <[u8; 32]>::from_hex("02356b628d108863baf8644c945d97bad70190af5957031f4852d00d0f690a77").unwrap();
-        let blockifier_account_class_hash = <[u8; 32]>::from_hex(BLOCKIFIER_ACCOUNT_CLASS.strip_prefix("0x").unwrap()).unwrap();
 
-        // Example tx : https://testnet.starkscan.co/tx/0x6fc3466f58b5c6aaa6633d48702e1f2048fb96b7de25f2bde0bce64dca1d212
-        let transaction = Transaction::new(
-            1_u8,
-            H256::from_str("0x06fc3466f58b5c6aaa6633d48702e1f2048fb96b7de25f2bde0bce64dca1d212").unwrap(),
-            bounded_vec![
-                H256::from_str("0x00f513fe663ffefb9ad30058bb2d2f7477022b149a0c02fb63072468d3406168").unwrap(),
-                H256::from_str("0x02e29e92544d31c03e89ecb2005941c88c28b4803a3647a7834afda12c77f096").unwrap()
+        let json_content: &str = include_str!("../../../../resources/transactions/invoke_emit_event.json");
+        let transaction = transaction_from_json(json_content, &[]).expect("Failed to create Transaction from JSON");
+
+        assert_ok!(Starknet::invoke(none_origin, transaction.clone()));
+
+        let emitted_event = EventWrapper {
+            keys: bounded_vec![
+                H256::from_str("0x02d4fbe4956fedf49b5892807e00e7e9eea4680becba55f9187684a69e9424fa").unwrap()
             ],
-            bounded_vec!(),
-            blockifier_account_address,
-            U256::from(0),
-            CallEntryPointWrapper::new(
-                Some(blockifier_account_class_hash),
-                EntryPointTypeWrapper::External,
-                None,
-                bounded_vec![
-
-                    U256::from_str("0x024d1e355f6b9d27a5a420c8f4b50cea9154a8e34ad30fc39d7c98d3c177d0d7").unwrap(), // Contract address
-                    U256::from_str("0x00966af5d72d3975f70858b044c77785d3710638bbcebbd33cc7001a91025588").unwrap(), // Selector
-                    U256::zero(),
-                ],
-                blockifier_account_address,
-                blockifier_account_address,
+            data: bounded_vec!(
+                H256::from_str("0x0000000000000000000000000000000000000000000000000000000000000001").unwrap()
             ),
-            None,
-            None,
-        );
-        assert_ok!(Starknet::invoke(none_origin, transaction));
+            from_address: H256::from_str("0x024d1e355f6b9d27a5a420c8f4b50cea9154a8e34ad30fc39d7c98d3c177d0d7")
+                .unwrap()
+                .to_fixed_bytes(),
+        };
 
-        System::assert_last_event(
-            Event::StarknetEvent(EventWrapper {
-                keys: bounded_vec![
-                    H256::from_str("0x02d4fbe4956fedf49b5892807e00e7e9eea4680becba55f9187684a69e9424fa").unwrap()
-                ],
-                data: bounded_vec!(
-                    H256::from_str("0x0000000000000000000000000000000000000000000000000000000000000001").unwrap()
-                ),
-                from_address: H256::from_str("0x024d1e355f6b9d27a5a420c8f4b50cea9154a8e34ad30fc39d7c98d3c177d0d7")
-                    .unwrap()
-                    .to_fixed_bytes(),
-            })
-            .into(),
-        );
+        System::assert_last_event(Event::StarknetEvent(emitted_event.clone()).into());
         let pending = Starknet::pending();
-
-        let (_transaction_commitment, (event_commitment, event_count)) =
-            commitment::calculate_commitments::<PedersenHasher>(&pending);
+        let events = Starknet::pending_events();
+        let transactions: Vec<Transaction> = pending.clone().into_iter().map(|(transaction, _)| transaction).collect();
+        let (_transaction_commitment, event_commitment) =
+            commitment::calculate_commitments::<PedersenHasher>(&transactions, &events);
         assert_eq!(
             event_commitment,
             H256::from_str("0x01e95b35377e090a7448a6d09f207557f5fcc962f128ad8416d41c387dda3ec3").unwrap()
         );
-        assert_eq!(event_count, 1);
+        assert_eq!(events.len(), 1);
+
+        pretty_assertions::assert_eq!(pending.len(), 1);
+
+        let receipt = &pending.get(0).unwrap().1;
+        pretty_assertions::assert_eq!(receipt.actual_fee, U256::from(0));
+        pretty_assertions::assert_eq!(receipt.events.len(), 1);
+        pretty_assertions::assert_eq!(receipt.events.get(0).unwrap(), &emitted_event);
+        pretty_assertions::assert_eq!(receipt.transaction_hash, transaction.hash);
+        pretty_assertions::assert_eq!(receipt.tx_type, TxType::InvokeTx);
     });
 }
 
@@ -242,43 +200,20 @@ fn given_hardcoded_contract_run_storage_read_and_write_it_works() {
         run_to_block(2);
 
         let none_origin = RuntimeOrigin::none();
-        let contract_address_str = "02356b628D108863BAf8644c945d97bAD70190AF5957031f4852d00D0F690a77";
-        let contract_address_bytes = <[u8; 32]>::from_hex(contract_address_str).unwrap();
 
-        let class_hash_str = "025ec026985a3bf9d0cc1fe17326b245bfdc3ff89b8fde106242a3ea56c5a918";
-        let class_hash_bytes = <[u8; 32]>::from_hex(class_hash_str).unwrap();
+        let json_content: &str = include_str!("../../../../resources/transactions/storage_read_write.json");
+        let transaction =
+            transaction_from_json(json_content, ACCOUNT_CONTRACT_PATH).expect("Failed to create Transaction from JSON");
 
         let target_contract_address =
             U256::from_str("024d1e355f6b9d27a5a420c8f4b50cea9154a8e34ad30fc39d7c98d3c177d0d7").unwrap();
-        // test_storage_read_write
-        let target_selector =
-            U256::from_str("0x03b097c62d3e4b85742aadd0dfb823f96134b886ec13bda57b68faf86f294d97").unwrap();
         let storage_var_selector = U256::from(25);
-        let storage_var_val = U256::one();
-
-        let transaction = Transaction {
-            sender_address: contract_address_bytes,
-            call_entrypoint: CallEntryPointWrapper::new(
-                Some(class_hash_bytes),
-                EntryPointTypeWrapper::External,
-                None,
-                bounded_vec![
-                    target_contract_address,
-                    target_selector,
-                    U256::from(2),
-                    storage_var_selector,
-                    storage_var_val,
-                ],
-                contract_address_bytes,
-                contract_address_bytes,
-            ),
-            ..Transaction::default()
-        };
 
         let mut contract_address_bytes = [0_u8; 32];
         target_contract_address.to_big_endian(&mut contract_address_bytes);
         let mut storage_var_selector_bytes = [0_u8; 32];
         storage_var_selector.to_big_endian(&mut storage_var_selector_bytes);
+
         assert_ok!(Starknet::invoke(none_origin, transaction));
         assert_eq!(
             Starknet::storage((contract_address_bytes, H256::from_slice(&storage_var_selector_bytes))),
@@ -305,8 +240,7 @@ fn given_contract_run_deploy_account_tx_works() {
                 Some(account_class_hash),
                 EntryPointTypeWrapper::External,
                 None,
-                BoundedVec::try_from(calldata.clone().into_iter().map(|x| U256::from(x)).collect::<Vec<U256>>())
-                    .unwrap(),
+                BoundedVec::try_from(calldata.clone().into_iter().map(U256::from).collect::<Vec<U256>>()).unwrap(),
                 test_addr,
                 test_addr,
             ),
@@ -337,8 +271,7 @@ fn given_contract_run_deploy_account_tx_twice_fails() {
                 Some(account_class_hash),
                 EntryPointTypeWrapper::External,
                 None,
-                BoundedVec::try_from(calldata.clone().into_iter().map(|x| U256::from(x)).collect::<Vec<U256>>())
-                    .unwrap(),
+                BoundedVec::try_from(calldata.clone().into_iter().map(U256::from).collect::<Vec<U256>>()).unwrap(),
                 test_addr,
                 test_addr,
             ),
@@ -413,11 +346,234 @@ fn given_contract_declare_tx_works_once_not_twice() {
             Error::<Test>::ContractClassMustBeSpecified
         );
 
-        transaction.contract_class = Some(erc20_class.clone());
+        transaction.contract_class = Some(erc20_class);
 
         assert_ok!(Starknet::declare(none_origin.clone(), transaction.clone()));
         // TODO: Uncomment once we have ABI support
         // assert_eq!(Starknet::contract_class_by_class_hash(erc20_class_hash), erc20_class);
         assert_err!(Starknet::declare(none_origin, transaction), Error::<Test>::ClassHashAlreadyDeclared);
     });
+}
+
+#[test]
+fn given_balance_on_account_then_transfer_fees_works() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let from = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15];
+        let to = Starknet::current_block().header().sequencer_address;
+        let amount = 100;
+        let token_address = Starknet::fee_token_address();
+
+        assert_ok!(Starknet::transfer_fees(from, to, amount));
+        // Check that balance is deducted from sn account
+        assert_eq!(
+            Starknet::storage((
+                token_address, // Fee token address
+                // pedersen(sn_keccak(b"ERC20_balances"), 0x0F) which is the key in the starknet contract for
+                // ERC20_balances(0x0F).low
+                H256::from_str("0x078e4fa4db2b6f3c7a9ece31571d47ac0e853975f90059f7c9df88df974d9093").unwrap(),
+            )),
+            U256::from(u128::MAX) - amount
+        );
+        assert_eq!(
+            Starknet::storage((
+                token_address, // Fee token address
+                // pedersen(sn_keccak(b"ERC20_balances"), 0x0F) + 1 which is the key in the starknet contract for
+                // ERC20_balances(0x0F).high
+                H256::from_str("0x078e4fa4db2b6f3c7a9ece31571d47ac0e853975f90059f7c9df88df974d9094").unwrap(),
+            )),
+            U256::from(u128::MAX)
+        );
+        assert_eq!(
+            Starknet::storage((
+                token_address, // Fee token address
+                // pedersen(sn_keccak(b"ERC20_balances"), 0x02) which is the key in the starknet contract for
+                // ERC20_balances(0x0F).low
+                H256::from_str("0x01d8bbc4f93f5ab9858f6c0c0de2769599fb97511503d5bf2872ef6846f2146f").unwrap(),
+            )),
+            U256::from(amount)
+        );
+        assert_eq!(
+            Starknet::storage((
+                token_address, // Fee token address
+                // pedersen(sn_keccak(b"ERC20_balances"), 0x02) + 1 which is the key in the starknet contract for
+                // ERC20_balances(0x0F).high
+                H256::from_str("0x01d8bbc4f93f5ab9858f6c0c0de2769599fb97511503d5bf2872ef6846f21470").unwrap(),
+            )),
+            U256::zero()
+        );
+        System::assert_last_event(
+            Event::StarknetEvent(EventWrapper {
+                keys: bounded_vec!(
+                    H256::from_str("0x0099cd8bde557814842a3121e8ddfd433a539b8c9f14bf31ebf108d12e6196e9").unwrap()
+                ),
+                data: bounded_vec!(
+                    // From
+                    H256::from_slice(&from),
+                    // To
+                    H256::from_slice(&SEQUENCER_ADDRESS),
+                    // Amount low
+                    H256::from_str("0x0000000000000000000000000000000000000000000000000000000000000064").unwrap(),
+                    // Amount High
+                    H256::from_str("0x0000000000000000000000000000000000000000000000000000000000000000").unwrap(),
+                ),
+                from_address: [
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 170,
+                ],
+            })
+            .into(),
+        );
+    })
+}
+#[test]
+fn given_no_balance_on_account_then_transfer_fees_fails() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let from = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let to = Starknet::current_block().header().sequencer_address;
+        let amount = 100;
+
+        assert_err!(Starknet::transfer_fees(from, to, amount), Invalid(Payment));
+        // Check that balance is not deducted from sn account
+        assert_eq!(
+            Starknet::storage((
+                <[u8; 32]>::from_hex("00000000000000000000000000000000000000000000000000000000000000AA").unwrap(), // Fee token address
+                // pedersen(sn_keccak(b"ERC20_balances"), 0x01) which is the key in the starknet contract for
+                // ERC20_balances(0x0F).low
+                H256::from_str("0x078e4fa4db2b6f3c7a9ece31571d47ac0e853975f90059f7c9df88df974d9093").unwrap(),
+            )),
+            U256::from(u128::MAX)
+        );
+        assert_eq!(
+            Starknet::storage((
+                <[u8; 32]>::from_hex("00000000000000000000000000000000000000000000000000000000000000AA").unwrap(), // Fee token address
+                // pedersen(sn_keccak(b"ERC20_balances"), 0x01) + 1 which is the key in the starknet contract for
+                // ERC20_balances(0x0F).high
+                H256::from_str("0x078e4fa4db2b6f3c7a9ece31571d47ac0e853975f90059f7c9df88df974d9094").unwrap(),
+            )),
+            U256::from(u128::MAX)
+        )
+    })
+}
+
+#[test]
+fn given_root_when_set_fee_token_address_then_fee_token_address_is_updated() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(0);
+        run_to_block(2);
+
+        let root_origin = RuntimeOrigin::root();
+        let current_fee_token_address = Starknet::fee_token_address();
+        let new_fee_token_address =
+            <[u8; 32]>::from_hex("00000000000000000000000000000000000000000000000000000000000000ff").unwrap();
+
+        assert_ok!(Starknet::set_fee_token_address(root_origin, new_fee_token_address));
+        System::assert_last_event(
+            Event::FeeTokenAddressChanged { old_fee_token_address: current_fee_token_address, new_fee_token_address }
+                .into(),
+        );
+    })
+}
+
+#[test]
+fn given_non_root_when_set_fee_token_address_then_it_fails() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(0);
+        run_to_block(2);
+
+        let non_root_origin = RuntimeOrigin::signed(1);
+        let new_fee_token_address =
+            <[u8; 32]>::from_hex("00000000000000000000000000000000000000000000000000000000000000ff").unwrap();
+        assert_err!(Starknet::set_fee_token_address(non_root_origin, new_fee_token_address), DispatchError::BadOrigin);
+    })
+}
+
+#[test]
+fn given_erc20_transfer_when_invoke_then_it_works() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(0);
+        run_to_block(1);
+        let origin = RuntimeOrigin::none();
+        let (sender_account, _, _) = account_helper(TEST_ACCOUNT_SALT);
+        // Declare ERC20 contract
+        declare_erc20(origin.clone(), sender_account);
+        // Deploy ERC20 contract
+        deploy_erc20(origin.clone(), sender_account);
+        // TODO: use dynamic values to craft invoke transaction
+        // Transfer some token
+        invoke_transfer_erc20(origin, sender_account);
+        System::assert_last_event(
+            Event::StarknetEvent(EventWrapper {
+                keys: bounded_vec![
+                    H256::from_str("0x0099cd8bde557814842a3121e8ddfd433a539b8c9f14bf31ebf108d12e6196e9").unwrap()
+                ],
+                data: bounded_vec!(
+                    H256::from_str("0x000000000000000000000000000000000000000000000000000000000000000f").unwrap(),
+                    H256::from_str("0x01176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8").unwrap(),
+                    H256::from_str("0x0000000000000000000000000000000000000000000000000000000000000002").unwrap(),
+                    H256::from_str("0x0000000000000000000000000000000000000000000000000000000000000000").unwrap(),
+                ),
+                from_address: H256::from_str("0x0074c41dd9ba722396796cba415f8a742d671eb872371c96ce1ce6016fd0f2bb")
+                    .unwrap()
+                    .to_fixed_bytes(),
+            })
+            .into(),
+        );
+    })
+}
+
+/// Helper function to declare ERC20 contract.
+/// # Arguments
+/// * `origin` - The origin of the transaction.
+/// * `sender_account` - The address of the sender account.
+fn declare_erc20(origin: RuntimeOrigin, sender_account: ContractAddressWrapper) {
+    let declare_transaction = Transaction {
+        sender_address: sender_account,
+        call_entrypoint: CallEntryPointWrapper::new(
+            Some(ERC20_CLASS_HASH),
+            EntryPointTypeWrapper::External,
+            None,
+            bounded_vec![],
+            sender_account,
+            sender_account,
+        ),
+        contract_class: Some(ERC20_CONTRACT_CLASS.clone()),
+        ..Transaction::default()
+    };
+    assert_ok!(Starknet::declare(origin, declare_transaction));
+}
+
+/// Helper function to deploy ERC20 contract.
+/// # Arguments
+/// * `origin` - The origin of the transaction.
+/// * `sender_account` - The address of the sender account.
+fn deploy_erc20(origin: RuntimeOrigin, _sender_account: ContractAddressWrapper) {
+    let deploy_transaction = transaction_from_json(
+        include_str!("../../../../resources/transactions/deploy_erc20.json"),
+        include_bytes!("../../../../resources/account/account.json"),
+    )
+    .unwrap();
+    assert_ok!(Starknet::invoke(origin, deploy_transaction));
+}
+
+/// Helper function to mint some tokens.
+/// # Arguments
+/// * `origin` - The origin of the transaction.
+/// * `sender_account` - The address of the sender account.
+fn invoke_transfer_erc20(origin: RuntimeOrigin, _sender_account: ContractAddressWrapper) {
+    let erc20_mint_tx_json: &str = include_str!("../../../../resources/transactions/invoke_erc20_transfer.json");
+    let erc20_mint_tx = transaction_from_json(erc20_mint_tx_json, &[]).expect("Failed to create Transaction from JSON");
+    assert_ok!(Starknet::invoke(origin, erc20_mint_tx));
+}
+
+lazy_static! {
+    static ref ERC20_CONTRACT_CLASS: ContractClassWrapper =
+        get_contract_class_wrapper(include_bytes!("../../../../resources/erc20/erc20.json"));
+}
+const ERC20_CLASS_HASH: [u8; 32] = hex!("01d1aacf8f874c4a865b974236419a46383a5161925626e9053202d8e87257e9");
+
+fn get_contract_class_wrapper(contract_content: &'static [u8]) -> ContractClassWrapper {
+    let contract_class: ContractClass =
+        serde_json::from_slice(contract_content).expect("File must contain the content of a compiled contract.");
+    ContractClassWrapper::from(contract_class)
 }
