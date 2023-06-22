@@ -136,28 +136,60 @@
 <a href="#136" id="136">136</a>
 <a href="#137" id="137">137</a>
 <a href="#138" id="138">138</a>
-</pre><pre class="rust"><code><span class="kw">use </span>alloc::sync::Arc;
-<span class="kw">use </span>alloc::{format, vec};
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+</pre><pre class="rust"><code><span class="kw">use </span>alloc::format;
+<span class="kw">use </span>alloc::sync::Arc;
 
 <span class="kw">use </span>blockifier::block_context::BlockContext;
-<span class="kw">use </span>blockifier::execution::entry_point::{CallEntryPoint, CallInfo, CallType, ExecutionContext, ExecutionResources};
+<span class="kw">use </span>blockifier::execution::entry_point::{
+    CallEntryPoint, CallInfo, CallType, EntryPointExecutionContext, ExecutionResources,
+};
 <span class="kw">use </span>blockifier::state::state_api::State;
 <span class="kw">use </span>blockifier::transaction::objects::AccountTransactionContext;
+<span class="kw">use </span>cairo_vm::felt::Felt252;
 <span class="kw">use </span>frame_support::BoundedVec;
-<span class="kw">use </span>sp_core::{ConstU32, H256, U256};
+<span class="kw">use </span>sp_core::ConstU32;
 <span class="kw">use </span>starknet_api::api_core::{ClassHash, ContractAddress, EntryPointSelector};
 <span class="kw">use </span>starknet_api::hash::StarkFelt;
 <span class="kw">use </span>starknet_api::transaction::Calldata;
+<span class="kw">use </span>starknet_api::StarknetApiError;
 
 <span class="kw">use </span><span class="kw">super</span>::entrypoint_wrapper::{
     EntryPointExecutionErrorWrapper, EntryPointExecutionResultWrapper, EntryPointTypeWrapper,
 };
-<span class="kw">use </span><span class="kw">super</span>::types::{ClassHashWrapper, ContractAddressWrapper};
-<span class="kw">use </span><span class="kw">crate</span>::block::serialize::SerializeBlockContext;
-<span class="kw">use </span><span class="kw">crate</span>::block::Block <span class="kw">as </span>StarknetBlock;
+<span class="kw">use </span><span class="kw">super</span>::types::{ClassHashWrapper, ContractAddressWrapper, Felt252Wrapper};
 
 <span class="doccomment">/// Max number of calldata / tx.
+</span><span class="attr">#[cfg(not(test))]
 </span><span class="kw">pub type </span>MaxCalldataSize = ConstU32&lt;{ u32::MAX }&gt;;
+
+<span class="attr">#[cfg(test)]
+</span><span class="kw">pub type </span>MaxCalldataSize = ConstU32&lt;<span class="number">100</span>&gt;;
 
 <span class="doccomment">/// Representation of a Starknet Call Entry Point.
 </span><span class="attr">#[derive(
@@ -178,13 +210,15 @@
     </span><span class="kw">pub </span>entrypoint_type: EntryPointTypeWrapper,
     <span class="doccomment">/// The entrypoint selector
     /// An invoke transaction without an entry point selector invokes the &#39;execute&#39; function.
-    </span><span class="kw">pub </span>entrypoint_selector: <span class="prelude-ty">Option</span>&lt;H256&gt;,
+    </span><span class="kw">pub </span>entrypoint_selector: <span class="prelude-ty">Option</span>&lt;Felt252Wrapper&gt;,
     <span class="doccomment">/// The Calldata
-    </span><span class="kw">pub </span>calldata: BoundedVec&lt;U256, MaxCalldataSize&gt;,
+    </span><span class="kw">pub </span>calldata: BoundedVec&lt;Felt252Wrapper, MaxCalldataSize&gt;,
     <span class="doccomment">/// The storage address
     </span><span class="kw">pub </span>storage_address: ContractAddressWrapper,
     <span class="doccomment">/// The caller address
     </span><span class="kw">pub </span>caller_address: ContractAddressWrapper,
+    <span class="doccomment">/// The initial gas
+    </span><span class="kw">pub </span>initial_gas: Felt252Wrapper,
 }
 <span class="comment">// Regular implementation.
 </span><span class="kw">impl </span>CallEntryPointWrapper {
@@ -192,38 +226,20 @@
     </span><span class="kw">pub fn </span>new(
         class_hash: <span class="prelude-ty">Option</span>&lt;ClassHashWrapper&gt;,
         entrypoint_type: EntryPointTypeWrapper,
-        entrypoint_selector: <span class="prelude-ty">Option</span>&lt;H256&gt;,
-        calldata: BoundedVec&lt;U256, MaxCalldataSize&gt;,
+        entrypoint_selector: <span class="prelude-ty">Option</span>&lt;Felt252Wrapper&gt;,
+        calldata: BoundedVec&lt;Felt252Wrapper, MaxCalldataSize&gt;,
         storage_address: ContractAddressWrapper,
         caller_address: ContractAddressWrapper,
+        initial_gas: Felt252Wrapper,
     ) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{ class_hash, entrypoint_type, entrypoint_selector, calldata, storage_address, caller_address }
-    }
-
-    <span class="doccomment">/// Convert to Starknet CallEntryPoint
-    </span><span class="kw">pub fn </span>to_starknet_call_entry_point(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; CallEntryPoint {
-        <span class="kw">let </span>class_hash = <span class="self">self</span>.class_hash.map(|class_hash| ClassHash(StarkFelt::new(class_hash).unwrap()));
-        CallEntryPoint {
+        <span class="self">Self </span>{
             class_hash,
-            entry_point_type: <span class="self">self</span>.entrypoint_type.to_starknet(),
-            entry_point_selector: EntryPointSelector(
-                StarkFelt::new(<span class="self">self</span>.entrypoint_selector.unwrap_or_default().<span class="number">0</span>).unwrap(),
-            ),
-            calldata: Calldata(Arc::new(
-                <span class="self">self</span>.calldata
-                    .clone()
-                    .into_inner()
-                    .iter()
-                    .map(|x| StarkFelt::try_from(<span class="macro">format!</span>(<span class="string">&quot;0x{x:X}&quot;</span>).as_str()).unwrap())
-                    .collect(),
-            )),
-            storage_address: ContractAddress::try_from(StarkFelt::new(<span class="self">self</span>.storage_address).unwrap()).unwrap(),
-            caller_address: ContractAddress::try_from(StarkFelt::new(<span class="self">self</span>.caller_address).unwrap()).unwrap(),
-            call_type: CallType::Call,
-            <span class="comment">// I have no idea what I&#39;m doing
-            // starknet-lib is constantly breaking it&#39;s api
-            // I hope it&#39;s nothing important ¯\_(ツ)_/¯
-            </span>code_address: <span class="prelude-val">None</span>,
+            entrypoint_type,
+            entrypoint_selector,
+            calldata,
+            storage_address,
+            caller_address,
+            initial_gas,
         }
     }
 
@@ -242,21 +258,18 @@
     </span><span class="kw">pub fn </span>execute&lt;S: State&gt;(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         state: <span class="kw-2">&amp;mut </span>S,
-        block: StarknetBlock,
-        fee_token_address: ContractAddressWrapper,
+        block_context: BlockContext,
     ) -&gt; EntryPointExecutionResultWrapper&lt;CallInfo&gt; {
-        <span class="kw">let </span>call_entry_point = <span class="self">self</span>.to_starknet_call_entry_point();
+        <span class="kw">let </span>call_entry_point: CallEntryPoint =
+            <span class="self">self</span>.clone().try_into().map_err(EntryPointExecutionErrorWrapper::StarknetApi)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>execution_resources = <span class="kw-2">&amp;mut </span>ExecutionResources::default();
-        <span class="kw">let </span>execution_context = <span class="kw-2">&amp;mut </span>ExecutionContext::default();
         <span class="kw">let </span>account_context = AccountTransactionContext::default();
-
-        <span class="comment">// Create the block context.
-        </span><span class="kw">let </span>block_context = BlockContext::try_serialize(block.header().clone(), fee_token_address)
-            .map_err(|<span class="kw">_</span>| EntryPointExecutionErrorWrapper::BlockContextSerializationError)<span class="question-mark">?</span>;
+        <span class="kw">let </span>max_steps = block_context.invoke_tx_max_n_steps;
+        <span class="kw">let </span>context = <span class="kw-2">&amp;mut </span>EntryPointExecutionContext::new(block_context, account_context, max_steps);
 
         call_entry_point
-            .execute(state, execution_resources, execution_context, <span class="kw-2">&amp;</span>block_context, <span class="kw-2">&amp;</span>account_context)
+            .execute(state, execution_resources, context)
             .map_err(EntryPointExecutionErrorWrapper::EntryPointExecution)
     }
 }
@@ -265,13 +278,52 @@
 </span><span class="kw">impl </span>Default <span class="kw">for </span>CallEntryPointWrapper {
     <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
-            class_hash: <span class="prelude-val">Some</span>(ClassHashWrapper::default()),
+            class_hash: <span class="prelude-val">None</span>,
             entrypoint_type: EntryPointTypeWrapper::External,
-            entrypoint_selector: <span class="prelude-val">Some</span>(H256::default()),
-            calldata: BoundedVec::try_from(<span class="macro">vec!</span>[U256::zero(); <span class="number">32</span>]).unwrap(),
+            entrypoint_selector: <span class="prelude-val">Some</span>(Felt252Wrapper::default()),
+            calldata: BoundedVec::default(),
             storage_address: ContractAddressWrapper::default(),
             caller_address: ContractAddressWrapper::default(),
+            initial_gas: Felt252Wrapper::default(),
         }
+    }
+}
+
+<span class="kw">impl </span>TryInto&lt;CallEntryPoint&gt; <span class="kw">for </span>CallEntryPointWrapper {
+    <span class="kw">type </span>Error = StarknetApiError;
+
+    <span class="kw">fn </span>try_into(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;CallEntryPoint, <span class="self">Self</span>::Error&gt; {
+        <span class="kw">let </span>class_hash = <span class="kw">if let </span><span class="prelude-val">Some</span>(class_hash) = <span class="self">self</span>.class_hash {
+            <span class="prelude-val">Some</span>(ClassHash(StarkFelt::new(class_hash.into())<span class="question-mark">?</span>))
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+
+        <span class="kw">let </span>entrypoint = CallEntryPoint {
+            class_hash,
+            entry_point_type: <span class="self">self</span>.entrypoint_type.clone().into(),
+            entry_point_selector: EntryPointSelector(StarkFelt::new(
+                <span class="self">self</span>.entrypoint_selector.unwrap_or_default().into(),
+            )<span class="question-mark">?</span>),
+            calldata: Calldata(Arc::new(
+                <span class="self">self</span>.calldata
+                    .clone()
+                    .into_inner()
+                    .iter()
+                    .map(|x| StarkFelt::try_from(<span class="macro">format!</span>(<span class="string">&quot;0x{:X}&quot;</span>, x.<span class="number">0</span>).as_str()).unwrap())
+                    .collect(),
+            )),
+            storage_address: ContractAddress::try_from(StarkFelt::new(<span class="self">self</span>.storage_address.into())<span class="question-mark">?</span>)<span class="question-mark">?</span>,
+            caller_address: ContractAddress::try_from(StarkFelt::new(<span class="self">self</span>.caller_address.into())<span class="question-mark">?</span>)<span class="question-mark">?</span>,
+            call_type: CallType::Call,
+            <span class="comment">// I have no idea what I&#39;m doing
+            // starknet-lib is constantly breaking it&#39;s api
+            // I hope it&#39;s nothing important ¯\_(ツ)_/¯
+            </span>code_address: <span class="prelude-val">None</span>,
+            initial_gas: Felt252::from_bytes_be(<span class="kw-2">&amp;</span><span class="self">self</span>.initial_gas.<span class="number">0</span>.to_bytes_be()),
+        };
+
+        <span class="prelude-val">Ok</span>(entrypoint)
     }
 }
 </code></pre></div>

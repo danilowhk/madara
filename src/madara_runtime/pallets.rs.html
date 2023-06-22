@@ -165,14 +165,12 @@
 <a href="#165" id="165">165</a>
 <a href="#166" id="166">166</a>
 <a href="#167" id="167">167</a>
-<a href="#168" id="168">168</a>
-<a href="#169" id="169">169</a>
-<a href="#170" id="170">170</a>
-<a href="#171" id="171">171</a>
-<a href="#172" id="172">172</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Configuration of the pallets used in the runtime.
+//! The pallets used in the runtime are configured here.
+//! This file is used to generate the `construct_runtime!` macro.
 
-</span><span class="kw">pub use </span>frame_support::traits::{
+</span><span class="kw">use </span>frame_support::traits::ConstBool;
+<span class="kw">pub use </span>frame_support::traits::{
     ConstU128, ConstU32, ConstU64, ConstU8, KeyOwnerProofSystem, OnTimestampSet, Randomness, StorageInfo,
 };
 <span class="kw">pub use </span>frame_support::weights::constants::{
@@ -181,12 +179,9 @@
 <span class="kw">pub use </span>frame_support::weights::{IdentityFee, Weight};
 <span class="kw">pub use </span>frame_support::{construct_runtime, parameter_types, StorageValue};
 <span class="kw">pub use </span>frame_system::Call <span class="kw">as </span>SystemCall;
-<span class="kw">pub use </span>pallet_balances::Call <span class="kw">as </span>BalancesCall;
 <span class="doccomment">/// Import the StarkNet pallet.
 </span><span class="kw">pub use </span>pallet_starknet;
-<span class="kw">use </span>pallet_starknet::StarknetFee;
 <span class="kw">pub use </span>pallet_timestamp::Call <span class="kw">as </span>TimestampCall;
-<span class="kw">use </span>pallet_transaction_payment::ConstFeeMultiplier;
 <span class="kw">use </span>sp_consensus_aura::sr25519::AuthorityId <span class="kw">as </span>AuraId;
 <span class="kw">use </span>sp_runtime::generic;
 <span class="kw">use </span>sp_runtime::traits::{AccountIdLookup, BlakeTwo256};
@@ -199,6 +194,27 @@
 
 <span class="comment">// Configure FRAME pallets to include in runtime.
 
+// --------------------------------------
+// CUSTOM PALLETS
+// --------------------------------------
+
+</span><span class="doccomment">/// Configure the Starknet pallet in pallets/starknet.
+</span><span class="kw">impl </span>pallet_starknet::Config <span class="kw">for </span>Runtime {
+    <span class="kw">type </span>RuntimeEvent = RuntimeEvent;
+    <span class="kw">type </span>StateRoot = pallet_starknet::state_root::IntermediateStateRoot&lt;<span class="self">Self</span>&gt;;
+    <span class="kw">type </span>SystemHash = mp_starknet::crypto::hash::pedersen::PedersenHasher;
+    <span class="kw">type </span>TimestampProvider = Timestamp;
+    <span class="kw">type </span>UnsignedPriority = UnsignedPriority;
+    <span class="kw">type </span>TransactionLongevity = TransactionLongevity;
+    <span class="kw">type </span>InvokeTxMaxNSteps = InvokeTxMaxNSteps;
+    <span class="kw">type </span>ValidateMaxNSteps = ValidateMaxNSteps;
+}
+
+<span class="doccomment">/// --------------------------------------
+/// FRAME SYSTEM PALLET
+/// --------------------------------------
+
+/// Configuration of `frame_system` pallet.
 </span><span class="kw">impl </span>frame_system::Config <span class="kw">for </span>Runtime {
     <span class="doccomment">/// The basic call filter to use in dispatchable.
     </span><span class="kw">type </span>BaseCallFilter = frame_support::traits::Everything;
@@ -241,7 +257,7 @@
     <span class="doccomment">/// What to do if an account is fully reaped from the system.
     </span><span class="kw">type </span>OnKilledAccount = ();
     <span class="doccomment">/// The data to be stored in an account.
-    </span><span class="kw">type </span>AccountData = pallet_balances::AccountData&lt;Balance&gt;;
+    </span><span class="kw">type </span>AccountData = ();
     <span class="doccomment">/// Weight information for the extrinsics of this pallet.
     </span><span class="kw">type </span>SystemWeightInfo = ();
     <span class="doccomment">/// This is used as an identifier of the chain. 42 is the generic substrate prefix.
@@ -251,14 +267,28 @@
     <span class="kw">type </span>MaxConsumers = frame_support::traits::ConstU32&lt;<span class="number">16</span>&gt;;
 }
 
-<span class="comment">// Authority-based consensus protocol used for block production
+<span class="comment">// --------------------------------------
+// CONSENSUS RELATED FRAME PALLETS
+// --------------------------------------
+// Notes:
+// Aura is the consensus algorithm used for block production.
+// Grandpa is the consensus algorithm used for block finalization.
+// We want to support multiple flavors of consensus algorithms.
+// Specifically we want to implement some proposals defined in the Starknet community forum.
+// For more information see: https://community.starknet.io/t/starknet-decentralized-protocol-i-introduction/2671
+// You can also follow this issue on github: https://github.com/keep-starknet-strange/madara/issues/83
+
+</span><span class="doccomment">/// Authority-based consensus protocol used for block production.
+/// TODO: Comment and explain the rationale behind the configuration items.
 </span><span class="kw">impl </span>pallet_aura::Config <span class="kw">for </span>Runtime {
     <span class="kw">type </span>AuthorityId = AuraId;
     <span class="kw">type </span>DisabledValidators = ();
     <span class="kw">type </span>MaxAuthorities = ConstU32&lt;<span class="number">32</span>&gt;;
+    <span class="kw">type </span>AllowMultipleBlocksPerSlot = ConstBool&lt;<span class="bool-val">true</span>&gt;;
 }
 
-<span class="comment">// Deterministic finality mechanism used for block finalization
+<span class="doccomment">/// Deterministic finality mechanism used for block finalization.
+/// TODO: Comment and explain the rationale behind the configuration items.
 </span><span class="kw">impl </span>pallet_grandpa::Config <span class="kw">for </span>Runtime {
     <span class="kw">type </span>RuntimeEvent = RuntimeEvent;
 
@@ -270,7 +300,12 @@
     <span class="kw">type </span>EquivocationReportSystem = ();
 }
 
-<span class="comment">// Timestamp manipulation
+<span class="doccomment">/// --------------------------------------
+/// OTHER 3RD PARTY FRAME PALLETS
+/// --------------------------------------
+
+/// Timestamp manipulation.
+/// For instance, we need it to set the timestamp of the Starkknet block.
 </span><span class="kw">impl </span>pallet_timestamp::Config <span class="kw">for </span>Runtime {
     <span class="doccomment">/// A timestamp: milliseconds since the unix epoch.
     </span><span class="kw">type </span>Moment = u64;
@@ -279,56 +314,11 @@
     <span class="kw">type </span>WeightInfo = ();
 }
 
-<span class="comment">// Provides interaction with balances and accounts
-</span><span class="kw">impl </span>pallet_balances::Config <span class="kw">for </span>Runtime {
-    <span class="kw">type </span>MaxLocks = ConstU32&lt;<span class="number">50</span>&gt;;
-    <span class="kw">type </span>MaxReserves = ();
-    <span class="kw">type </span>ReserveIdentifier = [u8; <span class="number">8</span>];
-    <span class="doccomment">/// The type for recording an account&#39;s balance.
-    </span><span class="kw">type </span>Balance = Balance;
-    <span class="doccomment">/// The ubiquitous event type.
-    </span><span class="kw">type </span>RuntimeEvent = RuntimeEvent;
-    <span class="kw">type </span>DustRemoval = ();
-    <span class="kw">type </span>ExistentialDeposit = ConstU128&lt;EXISTENTIAL_DEPOSIT&gt;;
-    <span class="kw">type </span>AccountStore = System;
-    <span class="kw">type </span>WeightInfo = pallet_balances::weights::SubstrateWeight&lt;Runtime&gt;;
-}
-
-<span class="comment">// Provides the logic needed to handle transaction fees
-</span><span class="kw">impl </span>pallet_transaction_payment::Config <span class="kw">for </span>Runtime {
-    <span class="kw">type </span>RuntimeEvent = RuntimeEvent;
-    <span class="kw">type </span>OnChargeTransaction = StarknetFee;
-    <span class="kw">type </span>OperationalFeeMultiplier = ConstU8&lt;<span class="number">5</span>&gt;;
-    <span class="kw">type </span>WeightToFee = IdentityFee&lt;Balance&gt;;
-    <span class="kw">type </span>LengthToFee = IdentityFee&lt;Balance&gt;;
-    <span class="kw">type </span>FeeMultiplierUpdate = ConstFeeMultiplier&lt;FeeMultiplier&gt;;
-}
-<span class="comment">// Allows executing privileged functions
-</span><span class="kw">impl </span>pallet_sudo::Config <span class="kw">for </span>Runtime {
-    <span class="kw">type </span>RuntimeEvent = RuntimeEvent;
-    <span class="kw">type </span>RuntimeCall = RuntimeCall;
-}
-
 <span class="macro">parameter_types! </span>{
     <span class="kw">pub const </span>UnsignedPriority: u64 = <span class="number">1 </span>&lt;&lt; <span class="number">20</span>;
-}
-
-<span class="doccomment">/// Configure the Starknet pallet in pallets/starknet.
-</span><span class="kw">impl </span>pallet_starknet::Config <span class="kw">for </span>Runtime {
-    <span class="kw">type </span>RuntimeEvent = RuntimeEvent;
-    <span class="kw">type </span>StateRoot = pallet_starknet::state_root::IntermediateStateRoot&lt;<span class="self">Self</span>&gt;;
-    <span class="kw">type </span>SystemHash = mp_starknet::crypto::hash::pedersen::PedersenHasher;
-    <span class="kw">type </span>TimestampProvider = Timestamp;
-    <span class="kw">type </span>UnsignedPriority = UnsignedPriority;
-}
-
-<span class="doccomment">/// A stateless module with helpers for dispatch management which does no re-authentication.
-/// We use this to enable batch dispatches.
-</span><span class="kw">impl </span>pallet_utility::Config <span class="kw">for </span>Runtime {
-    <span class="kw">type </span>RuntimeEvent = RuntimeEvent;
-    <span class="kw">type </span>RuntimeCall = RuntimeCall;
-    <span class="kw">type </span>WeightInfo = ();
-    <span class="kw">type </span>PalletsOrigin = OriginCaller;
+    <span class="kw">pub const </span>TransactionLongevity: u64 = u64::MAX;
+    <span class="kw">pub const </span>InvokeTxMaxNSteps: u32 = <span class="number">1_000_000</span>;
+    <span class="kw">pub const </span>ValidateMaxNSteps: u32 = <span class="number">1_000_000</span>;
 }
 
 <span class="doccomment">/// Implement the OnTimestampSet trait to override the default Aura.

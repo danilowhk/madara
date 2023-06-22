@@ -59,40 +59,82 @@
 <a href="#59" id="59">59</a>
 <a href="#60" id="60">60</a>
 <a href="#61" id="61">61</a>
+<a href="#62" id="62">62</a>
+<a href="#63" id="63">63</a>
+<a href="#64" id="64">64</a>
+<a href="#65" id="65">65</a>
+<a href="#66" id="66">66</a>
+<a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a>
+<a href="#71" id="71">71</a>
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
+<a href="#74" id="74">74</a>
+<a href="#75" id="75">75</a>
+<a href="#76" id="76">76</a>
+<a href="#77" id="77">77</a>
+<a href="#78" id="78">78</a>
+<a href="#79" id="79">79</a>
+<a href="#80" id="80">80</a>
+<a href="#81" id="81">81</a>
+<a href="#82" id="82">82</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Pedersen hash module.
 </span><span class="kw">use </span>starknet_crypto::{pedersen_hash, FieldElement};
 
-<span class="kw">use </span><span class="kw">crate</span>::traits::hash::{CryptoHasher, Hasher};
-
-<span class="doccomment">/// The Pedersen hash function.
-/// ### Arguments
-/// * `x`: The x coordinate
-/// * `y`: The y coordinate
-</span><span class="kw">pub fn </span>hash(data: <span class="kw-2">&amp;</span>[u8]) -&gt; [u8; <span class="number">32</span>] {
-    <span class="comment">// For now we use the first 31 bytes of the data as the field element, to avoid any panics.
-    // TODO: have proper error handling and think about how to hash efficiently big chunks of data.
-    </span><span class="kw">let </span>field_element = FieldElement::from_byte_slice_be(<span class="kw-2">&amp;</span>data[..<span class="number">31</span>]).unwrap();
-    FieldElement::to_bytes_be(<span class="kw-2">&amp;</span>pedersen_hash(<span class="kw-2">&amp;</span>FieldElement::ZERO, <span class="kw-2">&amp;</span>field_element))
-}
+<span class="kw">use </span><span class="kw">crate</span>::execution::felt252_wrapper::Felt252Wrapper;
+<span class="kw">use </span><span class="kw">crate</span>::traits::hash::{CryptoHasherT, DefaultHasher, HasherT};
 
 <span class="doccomment">/// The Pedersen hasher.
-</span><span class="attr">#[derive(Default)]
+</span><span class="attr">#[derive(Clone, Copy, Default, scale_codec::Encode, scale_codec::Decode, scale_info::TypeInfo)]
+#[cfg_attr(feature = <span class="string">&quot;std&quot;</span>, derive(serde::Serialize, serde::Deserialize))]
 </span><span class="kw">pub struct </span>PedersenHasher;
 
 <span class="doccomment">/// The Pedersen hasher implementation.
-</span><span class="kw">impl </span>Hasher <span class="kw">for </span>PedersenHasher {
-    <span class="doccomment">/// Hashes the given data.
+</span><span class="kw">impl </span>HasherT <span class="kw">for </span>PedersenHasher {
+    <span class="doccomment">/// The Pedersen hash function.
     /// # Arguments
     /// * `data` - The data to hash.
     /// # Returns
     /// The hash of the data.
-    </span><span class="kw">fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw-2">&amp;</span>[u8]) -&gt; [u8; <span class="number">32</span>] {
-        hash(data)
+    </span><span class="kw">fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw-2">&amp;</span>[u8]) -&gt; Felt252Wrapper {
+        <span class="comment">// For now we use the first 31 bytes of the data as the field element, to avoid any panics.
+        // TODO: have proper error handling and think about how to hash efficiently big chunks of data.
+        </span><span class="kw">let </span>field_element = FieldElement::from_byte_slice_be(<span class="kw-2">&amp;</span>data[..<span class="number">31</span>]).unwrap();
+        Felt252Wrapper(pedersen_hash(<span class="kw-2">&amp;</span>FieldElement::ZERO, <span class="kw-2">&amp;</span>field_element))
+    }
+
+    <span class="doccomment">/// Hashes a slice of field elements using the Pedersen hash function.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data to hash.
+    ///
+    /// # Returns
+    ///
+    /// The hash of the data.
+    </span><span class="kw">fn </span>hash_elements(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw-2">&amp;</span>[Felt252Wrapper]) -&gt; Felt252Wrapper {
+        <span class="kw">let </span><span class="kw-2">mut </span>hash = FieldElement::ZERO;
+        <span class="kw">for </span>element <span class="kw">in </span>data {
+            hash = pedersen_hash(<span class="kw-2">&amp;</span>hash, <span class="kw-2">&amp;</span>element.<span class="number">0</span>);
+        }
+
+        <span class="kw">let </span>data_len = Felt252Wrapper::from(data.len() <span class="kw">as </span>u64);
+        hash = pedersen_hash(<span class="kw-2">&amp;</span>hash, <span class="kw-2">&amp;</span>data_len.<span class="number">0</span>);
+
+        Felt252Wrapper(hash)
+    }
+}
+
+<span class="kw">impl </span>DefaultHasher <span class="kw">for </span>PedersenHasher {
+    <span class="kw">fn </span>hasher() -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::default()
     }
 }
 
 <span class="doccomment">/// The pedersen CryptoHasher implementation.
-</span><span class="kw">impl </span>CryptoHasher <span class="kw">for </span>PedersenHasher {
+</span><span class="kw">impl </span>CryptoHasherT <span class="kw">for </span>PedersenHasher {
     <span class="attr">#[inline(always)]
     </span><span class="kw">fn </span>hash(a: FieldElement, b: FieldElement) -&gt; FieldElement {
         pedersen_hash(<span class="kw-2">&amp;</span>a, <span class="kw-2">&amp;</span>b)
@@ -106,14 +148,14 @@
     ///
     /// # Returns
     ///
-    /// h(h(h(h(0, data[0]), data[1]), ...), data[n-1]), n).
+    /// h(h(h(h(0, data\[0\]), data\[1\]), ...), data\[n-1\]), n).
     </span><span class="attr">#[inline]
     </span><span class="kw">fn </span>compute_hash_on_elements(elements: <span class="kw-2">&amp;</span>[FieldElement]) -&gt; FieldElement {
         <span class="kw">if </span>elements.is_empty() {
-            &lt;PedersenHasher <span class="kw">as </span>CryptoHasher&gt;::hash(FieldElement::ZERO, FieldElement::ZERO)
+            &lt;PedersenHasher <span class="kw">as </span>CryptoHasherT&gt;::hash(FieldElement::ZERO, FieldElement::ZERO)
         } <span class="kw">else </span>{
-            <span class="kw">let </span>hash = elements.iter().fold(FieldElement::ZERO, |a, b| &lt;PedersenHasher <span class="kw">as </span>CryptoHasher&gt;::hash(a, <span class="kw-2">*</span>b));
-            &lt;PedersenHasher <span class="kw">as </span>CryptoHasher&gt;::hash(
+            <span class="kw">let </span>hash = elements.iter().fold(FieldElement::ZERO, |a, b| &lt;PedersenHasher <span class="kw">as </span>CryptoHasherT&gt;::hash(a, <span class="kw-2">*</span>b));
+            &lt;PedersenHasher <span class="kw">as </span>CryptoHasherT&gt;::hash(
                 hash,
                 FieldElement::from_byte_slice_be(<span class="kw-2">&amp;</span>elements.len().to_be_bytes()).unwrap(),
             )
